@@ -1,11 +1,20 @@
+// To enable real-time updates with socket.io:
+// 1. Start your Express backend: node server.js (or npm run server if you have a script)
+// 2. Start your Next.js frontend: npm run dev
+// 3. In your frontend code, set the socket.io client to connect to http://localhost:5001
+// 4. Set NEXT_PUBLIC_API_BASE in .env.local to http://localhost:5001 for API calls
+// This way, your frontend uses Next.js on port 3000 and real-time backend on port 5001.
+
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-
+const cors = require("cors");
 const app = express();
+app.use(cors({ origin: "*" }));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 const server = http.createServer(app);
 
 const storage = multer.diskStorage({
@@ -15,7 +24,7 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    const uniqueName = Date.now() + "-" + file.originalname;
+    const uniqueName =  file.originalname;
     cb(null, uniqueName);
   }
 });
@@ -69,6 +78,6 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {});
 });
 
-server.listen(5000, () => {
+server.listen(5001, () => {
   console.log("Server listening...");
 });
