@@ -28,6 +28,10 @@ const upload = multer({ storage });
 
 let lastPhoto = null;
 
+app.get("/", (req, res) => {
+  res.send({"message":"API live master."});
+});
+
 // Upload route
 app.post("/upload", upload.single("image"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
