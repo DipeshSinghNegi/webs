@@ -20,31 +20,25 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    // safer to add unique name to avoid overwriting
     const uniqueName = Date.now() + "-" + file.originalname;
     cb(null, uniqueName);
-  }
+  },
 });
 const upload = multer({ storage });
 
+let queue = [];
+let processing = false;
 let lastPhoto = null;
 let lastPhotoPath = null;
 
-// === Queue system ===
-let queue = [];
-let processing = false;
-const DISPLAY_DELAY = 3000; // 3s between images
+function processNext(io) {
+  if (processing) return; // already working
+  if (queue.length === 0) return;
 
-function processQueue() {
-  if (queue.length === 0) {
-    processing = false;
-    return;
-  }
   processing = true;
-
   const { photoUrl, filePath, resolve } = queue.shift();
 
-  // cleanup old photo (optional: keep history if you want slideshow)
+  // delete previous file if you don't want to keep
   if (lastPhotoPath) {
     fs.unlink(lastPhotoPath, (err) => {
       if (err) console.error("Failed to delete old photo:", err);
@@ -54,13 +48,18 @@ function processQueue() {
   lastPhoto = photoUrl;
   lastPhotoPath = filePath;
 
+  // emit to main panel
   io.to("main-panel").emit("display_photo", photoUrl);
 
-  // tell the uploader their image is now live
-  resolve({ success: true, url: photoUrl });
+  // wait for ack from main panel before resolving + moving on
+  const ackHandler = () => {
+    resolve({ success: true, url: photoUrl });
+    processing = false;
+    processNext(io); // continue with next in queue
+  };
 
-  // wait DISPLAY_DELAY then continue
-  setTimeout(processQueue, DISPLAY_DELAY);
+  // attach one-time listener for ack
+  io.once("photo_displayed", ackHandler);
 }
 
 app.post("/upload", upload.single("image"), (req, res) => {
@@ -71,13 +70,10 @@ app.post("/upload", upload.single("image"), (req, res) => {
   const photoUrl = `/uploads/${req.file.filename}`;
   const filePath = path.join(__dirname, "uploads", req.file.filename);
 
-  // push into queue
   new Promise((resolve) => {
     queue.push({ photoUrl, filePath, resolve });
-    if (!processing) processQueue();
-  }).then((result) => {
-    res.send(result); // respond when this file has been displayed
-  });
+    processNext(io); // try to process if idle
+  }).then((result) => res.send(result));
 });
 
 app.get("/display_pic", (req, res) => {
@@ -88,8 +84,16 @@ app.get("/display_pic", (req, res) => {
 });
 
 const io = new Server(server, { cors: { origin: "*" } });
+
 io.on("connection", (socket) => {
-  socket.on("join_main_panel", () => socket.join("main-panel"));
+  socket.on("join_main_panel", () => {
+    socket.join("main-panel");
+  });
+
+  // main panel must call this when it finishes loading an image
+  socket.on("photo_loaded", () => {
+    io.emit("photo_displayed"); // trigger ack for current
+  });
 });
 
 server.listen(PORT, () => {
