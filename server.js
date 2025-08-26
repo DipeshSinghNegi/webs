@@ -20,8 +20,9 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    // ⚠️ consider adding unique IDs here to avoid collisions
-    cb(null, file.originalname);
+    // safer to add unique name to avoid overwriting
+    const uniqueName = Date.now() + "-" + file.originalname;
+    cb(null, uniqueName);
   }
 });
 const upload = multer({ storage });
@@ -29,46 +30,54 @@ const upload = multer({ storage });
 let lastPhoto = null;
 let lastPhotoPath = null;
 
-// ---- Cooldown state ----
-let lastUploadTime = 0;
-const COOLDOWN_MS = 3000; // 3 seconds
+// === Queue system ===
+let queue = [];
+let processing = false;
+const DISPLAY_DELAY = 3000; // 3s between images
 
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
-});
-
-app.get("/", (req, res) => {
-  res.send({ message: "API live master." });
-});
-
-app.post("/upload", upload.single("image"), (req, res) => {
-  const now = Date.now();
-
-  // Check cooldown
-  if (now - lastUploadTime < COOLDOWN_MS) {
-    return res.status(429).send({ error: "Please wait 3 seconds before next upload." });
+function processQueue() {
+  if (queue.length === 0) {
+    processing = false;
+    return;
   }
-  lastUploadTime = now;
+  processing = true;
 
-  if (!req.file) {
-    return res.status(400).send({ error: "No file uploaded." });
-  }
+  const { photoUrl, filePath, resolve } = queue.shift();
 
+  // cleanup old photo (optional: keep history if you want slideshow)
   if (lastPhotoPath) {
     fs.unlink(lastPhotoPath, (err) => {
       if (err) console.error("Failed to delete old photo:", err);
     });
   }
 
-  const photoUrl = `/uploads/${req.file.filename}`;
   lastPhoto = photoUrl;
-  lastPhotoPath = path.join(__dirname, "uploads", req.file.filename);
+  lastPhotoPath = filePath;
 
   io.to("main-panel").emit("display_photo", photoUrl);
 
-  res.send({ success: true, url: photoUrl });
+  // tell the uploader their image is now live
+  resolve({ success: true, url: photoUrl });
+
+  // wait DISPLAY_DELAY then continue
+  setTimeout(processQueue, DISPLAY_DELAY);
+}
+
+app.post("/upload", upload.single("image"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).send({ error: "No file uploaded." });
+  }
+
+  const photoUrl = `/uploads/${req.file.filename}`;
+  const filePath = path.join(__dirname, "uploads", req.file.filename);
+
+  // push into queue
+  new Promise((resolve) => {
+    queue.push({ photoUrl, filePath, resolve });
+    if (!processing) processQueue();
+  }).then((result) => {
+    res.send(result); // respond when this file has been displayed
+  });
 });
 
 app.get("/display_pic", (req, res) => {
@@ -78,12 +87,9 @@ app.get("/display_pic", (req, res) => {
   res.json({ photo: lastPhoto });
 });
 
+const io = new Server(server, { cors: { origin: "*" } });
 io.on("connection", (socket) => {
-  socket.on("join_main_panel", () => {
-    socket.join("main-panel");
-  });
-
-  socket.on("disconnect", () => {});
+  socket.on("join_main_panel", () => socket.join("main-panel"));
 });
 
 server.listen(PORT, () => {
