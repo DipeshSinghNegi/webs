@@ -13,6 +13,7 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 const app = express();
+const PORT = process.env.PORT;
 app.use(cors({ origin: "*" }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 const server = http.createServer(app);
@@ -78,6 +79,6 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {});
 });
 
-server.listen(5001, () => {
+server.listen(PORT, () => {
   console.log("Server listening...");
 });
