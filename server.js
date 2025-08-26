@@ -1,97 +1,63 @@
+// backend/server.js
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 
 const app = express();
-const PORT = process.env.PORT || 5001;
-
 app.use(cors({ origin: "*" }));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// serve uploaded files
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
+app.use("/uploads", express.static(UPLOAD_DIR));
+
 const server = http.createServer(app);
 
+// Multer setup
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, "uploads");
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-    cb(null, dir);
-  },
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    // safer to add unique name to avoid overwriting
-    const uniqueName = Date.now() + "-" + file.originalname;
+    const uniqueName = Date.now() + "-" + file.originalname; // avoid collisions
     cb(null, uniqueName);
   }
 });
 const upload = multer({ storage });
 
 let lastPhoto = null;
-let lastPhotoPath = null;
 
-// === Queue system ===
-let queue = [];
-let processing = false;
-const DISPLAY_DELAY = 3000; // 3s between images
-
-function processQueue() {
-  if (queue.length === 0) {
-    processing = false;
-    return;
-  }
-  processing = true;
-
-  const { photoUrl, filePath, resolve } = queue.shift();
-
-  // cleanup old photo (optional: keep history if you want slideshow)
-  if (lastPhotoPath) {
-    fs.unlink(lastPhotoPath, (err) => {
-      if (err) console.error("Failed to delete old photo:", err);
-    });
-  }
-
-  lastPhoto = photoUrl;
-  lastPhotoPath = filePath;
-
-  io.to("main-panel").emit("display_photo", photoUrl);
-
-  // tell the uploader their image is now live
-  resolve({ success: true, url: photoUrl });
-
-  // wait DISPLAY_DELAY then continue
-  setTimeout(processQueue, DISPLAY_DELAY);
-}
-
+// Upload route
 app.post("/upload", upload.single("image"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).send({ error: "No file uploaded." });
-  }
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
   const photoUrl = `/uploads/${req.file.filename}`;
-  const filePath = path.join(__dirname, "uploads", req.file.filename);
+  lastPhoto = photoUrl;
 
-  // push into queue
-  new Promise((resolve) => {
-    queue.push({ photoUrl, filePath, resolve });
-    if (!processing) processQueue();
-  }).then((result) => {
-    res.send(result); // respond when this file has been displayed
-  });
+  // cleanup: keep only last 10
+  const files = fs.readdirSync(UPLOAD_DIR)
+    .map(name => ({
+      name,
+      time: fs.statSync(path.join(UPLOAD_DIR, name)).mtime.getTime()
+    }))
+    .sort((a, b) => a.time - b.time); // oldest first
+
+  if (files.length > 10) {
+    const toDelete = files.slice(0, files.length - 10);
+    toDelete.forEach(f => fs.unlinkSync(path.join(UPLOAD_DIR, f.name)));
+  }
+
+  res.json({ success: true, url: photoUrl });
 });
 
+// Latest photo (polled every 3s)
 app.get("/display_pic", (req, res) => {
-  if (!lastPhoto) {
-    return res.status(400).send({ error: "No recent pics found" });
-  }
+  if (!lastPhoto) return res.status(400).json({ error: "No photos yet" });
   res.json({ photo: lastPhoto });
 });
 
-const io = new Server(server, { cors: { origin: "*" } });
-io.on("connection", (socket) => {
-  socket.on("join_main_panel", () => socket.join("main-panel"));
-});
-
+const PORT = process.env.PORT || 5001;
 server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
