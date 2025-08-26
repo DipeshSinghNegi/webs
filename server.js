@@ -1,10 +1,3 @@
-// To enable real-time updates with socket.io:
-// 1. Start your Express backend: node server.js (or npm run server if you have a script)
-// 2. Start your Next.js frontend: npm run dev
-// 3. In your frontend code, set the socket.io client to connect to http://localhost:5001
-// 4. Set NEXT_PUBLIC_API_BASE in .env.local to http://localhost:5001 for API calls
-// This way, your frontend uses Next.js on port 3000 and real-time backend on port 5001.
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -12,8 +5,10 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
+
 const app = express();
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 5001;
+
 app.use(cors({ origin: "*" }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 const server = http.createServer(app);
@@ -25,14 +20,18 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    const uniqueName =  file.originalname;
-    cb(null, uniqueName);
+    // ⚠️ consider adding unique IDs here to avoid collisions
+    cb(null, file.originalname);
   }
 });
 const upload = multer({ storage });
 
 let lastPhoto = null;
 let lastPhotoPath = null;
+
+// ---- Cooldown state ----
+let lastUploadTime = 0;
+const COOLDOWN_MS = 3000; // 3 seconds
 
 const io = new Server(server, {
   cors: {
@@ -45,6 +44,14 @@ app.get("/", (req, res) => {
 });
 
 app.post("/upload", upload.single("image"), (req, res) => {
+  const now = Date.now();
+
+  // Check cooldown
+  if (now - lastUploadTime < COOLDOWN_MS) {
+    return res.status(429).send({ error: "Please wait 3 seconds before next upload." });
+  }
+  lastUploadTime = now;
+
   if (!req.file) {
     return res.status(400).send({ error: "No file uploaded." });
   }
@@ -80,5 +87,5 @@ io.on("connection", (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log("Server listening...");
+  console.log(`Server listening on port ${PORT}`);
 });
