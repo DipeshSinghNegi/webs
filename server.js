@@ -15,6 +15,8 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 const server = http.createServer(app);
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 
 // Multer setup
 const storage = multer.diskStorage({
@@ -27,10 +29,6 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 let lastPhoto = null;
-
-app.get("/", (req, res) => {
-  res.send({"message":"API live master."});
-});
 
 // Upload route
 app.post("/upload", upload.single("image"), (req, res) => {
